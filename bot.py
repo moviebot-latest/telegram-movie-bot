@@ -4,11 +4,12 @@ import requests
 import threading
 from flask import Flask
 import os
+import asyncio
 
 TOKEN = os.getenv("BOT_TOKEN")
 OMDB_API = os.getenv("OMDB_API")
 
-# -------- WEB SERVER (FOR RENDER) --------
+# ---------- WEB SERVER FOR RENDER ----------
 web_app = Flask(__name__)
 
 @web_app.route("/")
@@ -20,10 +21,12 @@ def run_web():
     web_app.run(host="0.0.0.0", port=port)
 
 threading.Thread(target=run_web).start()
-# ----------------------------------------
+# -------------------------------------------
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎬 Send Movie Name")
+
 
 async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -33,7 +36,7 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         api = f"http://www.omdbapi.com/?t={name}&apikey={OMDB_API}"
-        res = requests.get(api)
+        res = requests.get(api, timeout=5)
         data = res.json()
     except:
         await loading.delete()
@@ -53,23 +56,33 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     runtime = data.get("Runtime")
     poster = data.get("Poster")
 
+    if poster == "N/A":
+        poster = "https://via.placeholder.com/300x450?text=No+Poster"
+
     search = title.replace(" ", "+")
 
-    # Servers
-    hdhub4u = f"https://new4.hdhub4u.fo/?s={search}"
-    vegamovies = f"https://vegamoviesdl.com/?s={search}"
-    moviews = f"https://moviews.xyz/?s={search}"
-    worldfree = f"https://worldfree4u.ist/?s={search}"
-    filmyzilla = f"https://www.filmyzilla32.com/?s={search}"
+    # ---------- SERVERS ----------
+    server1 = f"https://new4.hdhub4u.fo/?s={search}"
+    server2 = f"https://123mkv.bar/?s={search}"
+    server3 = f"https://mkvcinemas.sb/?s={search}"
+    server4 = f"https://worldfree4u.ist/?s={search}"
+    server5 = f"https://bolly4u.gifts/?s={search}"
+    server6 = f"https://1filmyfly.org/?s={search}"
+    # -----------------------------
 
     trailer = f"https://www.youtube.com/results?search_query={search}+trailer"
 
-    context.user_data["servers"] = [vegamovies, moviews, worldfree, filmyzilla]
+    context.user_data["servers"] = [server1, server2, server3, server4, server5, server6]
+    context.user_data["trailer"] = trailer
 
     keyboard = [
-        [InlineKeyboardButton("🎥 Watch Trailer", url=trailer)],
-        [InlineKeyboardButton("⬇ Download Movie (Server 1)", url=hdhub4u)],
-        [InlineKeyboardButton("🌐 More Servers", callback_data="servers")]
+        [
+            InlineKeyboardButton("🎬 Trailer", url=trailer),
+            InlineKeyboardButton("⬇ Download Server 1", url=server1)
+        ],
+        [
+            InlineKeyboardButton("🌐 More Servers", callback_data="servers")
+        ]
     ]
 
     caption = f"""
@@ -92,30 +105,74 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+
+# ---------- MORE SERVERS ----------
+
 async def servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
     await query.answer()
 
-    vegamovies, moviews, worldfree, filmyzilla = context.user_data["servers"]
+    anim = await query.message.reply_animation(
+        animation="https://media.giphy.com/media/3o7TKtnuHOHHUjR38Y/giphy.gif",
+        caption="🚀 Opening Servers..."
+    )
+
+    await asyncio.sleep(2)
+
+    s1, s2, s3, s4, s5, s6 = context.user_data["servers"]
 
     keyboard = [
-        [InlineKeyboardButton("Server 2 Vegamovies", url=vegamovies)],
-        [InlineKeyboardButton("Server 3 Moviews", url=moviews)],
-        [InlineKeyboardButton("Server 4 WorldFree4u", url=worldfree)],
-        [InlineKeyboardButton("Server 5 Filmyzilla", url=filmyzilla)]
+        [InlineKeyboardButton("Server 2", url=s2)],
+        [InlineKeyboardButton("Server 3", url=s3)],
+        [InlineKeyboardButton("Server 4", url=s4)],
+        [InlineKeyboardButton("Server 5", url=s5)],
+        [InlineKeyboardButton("Server 6", url=s6)],
+        [InlineKeyboardButton("⬅ Back", callback_data="back")]
     ]
 
     await query.message.reply_text(
-        "🌐 Select Server:",
+        "🌐 More Download Servers:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
+    await anim.delete()
+
+
+# ---------- BACK BUTTON ----------
+
+async def back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+    await query.answer()
+
+    s1 = context.user_data["servers"][0]
+    trailer = context.user_data["trailer"]
+
+    keyboard = [
+        [
+            InlineKeyboardButton("🎬 Trailer", url=trailer),
+            InlineKeyboardButton("⬇ Download Server 1", url=s1)
+        ],
+        [
+            InlineKeyboardButton("🌐 More Servers", callback_data="servers")
+        ]
+    ]
+
+    await query.message.reply_text(
+        "🎬 Back to main menu",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+# ---------- BOT START ----------
 
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie))
 app.add_handler(CallbackQueryHandler(servers, pattern="servers"))
+app.add_handler(CallbackQueryHandler(back, pattern="back"))
 
 print("Bot Running...")
 
