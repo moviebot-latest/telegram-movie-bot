@@ -5,10 +5,10 @@ import threading
 from flask import Flask
 import os
 
-TOKEN = "8243013762:AAHgbvNwuKFMzKQhai0c2YkWG7vgM9QMCfw"
-OMDB_API = "c5906b7b"
+TOKEN = os.getenv("BOT_TOKEN")
+OMDB_API = os.getenv("OMDB_API")
 
-# -------- WEB SERVER (PORT FIX FOR RENDER) --------
+# -------- WEB SERVER (FOR RENDER) --------
 web_app = Flask(__name__)
 
 @web_app.route("/")
@@ -20,15 +20,12 @@ def run_web():
     web_app.run(host="0.0.0.0", port=port)
 
 threading.Thread(target=run_web).start()
-# -------------------------------------------------
+# ----------------------------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎬 Send Movie Name")
 
 async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if not update.message or not update.message.text:
-        return
 
     name = update.message.text.strip()
 
@@ -36,7 +33,7 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         api = f"http://www.omdbapi.com/?t={name}&apikey={OMDB_API}"
-        res = requests.get(api, timeout=10)
+        res = requests.get(api)
         data = res.json()
     except:
         await loading.delete()
@@ -58,7 +55,7 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     search = title.replace(" ", "+")
 
-    # -------- Servers --------
+    # Servers
     hdhub4u = f"https://new4.hdhub4u.fo/?s={search}"
     vegamovies = f"https://vegamoviesdl.com/?s={search}"
     moviews = f"https://moviews.xyz/?s={search}"
