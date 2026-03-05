@@ -28,7 +28,6 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await loading.delete()
 
-    # MOVIE NOT FOUND
     if data.get("Response") == "False":
         await update.message.reply_text("❌ Movie not found")
         return
@@ -42,7 +41,6 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     search = title.replace(" ","+")
 
-    # SERVER LINKS
     hdhub4u = f"https://new4.hdhub4u.fo/?s={search}"
     vegamovies = f"https://vegamoviesdl.com/?s={search}"
     moviews = f"https://moviews.xyz/?s={search}"
@@ -74,9 +72,9 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
 
     await update.message.reply_photo(
-        photo = poster,
-        caption = caption,
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        photo=poster,
+        caption=caption,
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 async def servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -95,7 +93,7 @@ async def servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.message.reply_text(
         "🌐 Select Server:",
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 app = ApplicationBuilder().token(TOKEN).build()
@@ -106,4 +104,5 @@ app.add_handler(CallbackQueryHandler(servers, pattern="servers"))
 
 print("Bot Running...")
 
-app.run_polling()
+if __name__ == "__main__":
+    app.run_polling()
