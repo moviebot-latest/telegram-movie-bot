@@ -7,19 +7,19 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Cal
 TOKEN = "7432781768:AAEpyVpDOYcVaxi8v7SKUH7wuAvUiNFDb44"
 OMDB_API = "c5906b7b"
 
-# ---------------- FLASK SERVER (Render awake) ----------------
+# ---------- Flask server (Render port fix) ----------
 app = Flask(__name__)
 
-@app.route('/')
+@app.route("/")
 def home():
     return "Bot is running"
 
-def run_web():
+def run():
     app.run(host="0.0.0.0", port=10000)
 
-threading.Thread(target=run_web).start()
+threading.Thread(target=run).start()
 
-# ---------------- TELEGRAM BOT ----------------
+# ---------- Telegram Bot ----------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎬 Send Movie Name")
@@ -31,100 +31,64 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     name = update.message.text.strip()
 
-    loading = await update.message.reply_text("🔎 Searching movie...")
+    msg = await update.message.reply_text("🔎 Searching movie...")
 
     try:
-        api = f"http://www.omdbapi.com/?t={name}&apikey={OMDB_API}"
-        res = requests.get(api, timeout=10)
+        url = f"http://www.omdbapi.com/?t={name}&apikey={OMDB_API}"
+        res = requests.get(url)
         data = res.json()
     except:
-        await loading.delete()
-        await update.message.reply_text("⚠ Server busy try again")
+        await msg.edit_text("⚠ Server busy")
         return
-
-    await loading.delete()
 
     if data.get("Response") == "False":
-        await update.message.reply_text("❌ Movie not found")
+        await msg.edit_text("❌ Movie not found")
         return
 
-    title = data.get("Title")
-    year = data.get("Year")
-    rating = data.get("imdbRating")
-    genre = data.get("Genre")
-    runtime = data.get("Runtime")
-    poster = data.get("Poster")
+    title = data["Title"]
+    year = data["Year"]
+    rating = data["imdbRating"]
+    genre = data["Genre"]
+    runtime = data["Runtime"]
+    poster = data["Poster"]
 
-    search = title.replace(" ","+")
+    search = title.replace(" ", "+")
 
-    hdhub4u = f"https://new4.hdhub4u.fo/?s={search}"
+    hdhub = f"https://new4.hdhub4u.fo/?s={search}"
     vegamovies = f"https://vegamoviesdl.com/?s={search}"
-    moviews = f"https://moviews.xyz/?s={search}"
-    worldfree = f"https://worldfree4u.ist/?s={search}"
-    filmyzilla = f"https://www.filmyzilla32.com/?s={search}"
 
     trailer = f"https://www.youtube.com/results?search_query={search}+trailer"
 
-    context.user_data["servers"] = [vegamovies, moviews, worldfree, filmyzilla]
-
-    keyboard = [
-        [InlineKeyboardButton("🎥 Watch Trailer", url=trailer)],
-        [InlineKeyboardButton("⬇ Download Movie", url=hdhub4u)],
-        [InlineKeyboardButton("🌐 More Servers", callback_data="servers")]
+    buttons = [
+        [InlineKeyboardButton("🎥 Trailer", url=trailer)],
+        [InlineKeyboardButton("⬇ Download", url=hdhub)],
+        [InlineKeyboardButton("Server 2", url=vegamovies)]
     ]
 
-    caption = f"""
+    text = f"""
 🎬 {title} ({year})
 
-⭐ IMDb Rating: {rating}
+⭐ IMDb: {rating}
 🎭 Genre: {genre}
-🎥 Runtime: {runtime}
+⏱ Runtime: {runtime}
 
-━━━━━━━━━━━━━━
-🍿 Watch • Download • Enjoy
-━━━━━━━━━━━━━━
-
-⚠ Use Brave Browser for no ads
+━━━━━━━━━━━━
+🍿 Watch • Download
+━━━━━━━━━━━━
 """
 
     await update.message.reply_photo(
         photo=poster,
-        caption=caption,
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        caption=text,
+        reply_markup=InlineKeyboardMarkup(buttons)
     )
 
-async def servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ---------- Run Bot ----------
 
-    query = update.callback_query
-    await query.answer()
+bot = ApplicationBuilder().token(TOKEN).build()
 
-    vegamovies, moviews, worldfree, filmyzilla = context.user_data["servers"]
+bot.add_handler(CommandHandler("start", start))
+bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie))
 
-    keyboard = [
-        [InlineKeyboardButton("Server 2 Vegamovies", url=vegamovies)],
-        [InlineKeyboardButton("Server 3 Moviews", url=moviews)],
-        [InlineKeyboardButton("Server 4 WorldFree4u", url=worldfree)],
-        [InlineKeyboardButton("Server 5 Filmyzilla", url=filmyzilla)]
-    ]
-
-    await query.message.reply_text(
-        "🌐 Select Server:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-# ---------------- RUN BOT ----------------
-
-import asyncio
-
-async def main():
-    bot = ApplicationBuilder().token(TOKEN).build()
-
-    bot.add_handler(CommandHandler("start", start))
-    bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie))
-    bot.add_handler(CallbackQueryHandler(servers, pattern="servers"))
-
-    print("Bot Running...")
-    await bot.run_polling()
-
-if __name__ == "__main__":
-    asyncio.run(main())
+print("Bot Running...")
+bot.run_polling()
