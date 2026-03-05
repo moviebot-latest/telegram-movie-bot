@@ -1,15 +1,29 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import requests
-import asyncio
+import threading
+from flask import Flask
+import os
 
 TOKEN = "7432781768:AAEpyVpDOYcVaxi8v7SKUH7wuAvUiNFDb44"
 OMDB_API = "c5906b7b"
 
+# -------- WEB SERVER (PORT FIX FOR RENDER) --------
+web_app = Flask(__name__)
+
+@web_app.route("/")
+def home():
+    return "Bot Running"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    web_app.run(host="0.0.0.0", port=port)
+
+threading.Thread(target=run_web).start()
+# -----------------------------------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎬 Send Movie Name")
-
 
 async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -80,7 +94,6 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-
 async def servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
@@ -100,21 +113,12 @@ async def servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie))
 app.add_handler(CallbackQueryHandler(servers, pattern="servers"))
 
+print("Bot Running...")
 
-async def main():
-    print("Bot Running...")
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    await asyncio.Event().wait()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+app.run_polling()
