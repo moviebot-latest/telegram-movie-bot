@@ -1,12 +1,15 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import requests
+import asyncio
 
 TOKEN = "7432781768:AAEpyVpDOYcVaxi8v7SKUH7wuAvUiNFDb44"
 OMDB_API = "c5906b7b"
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎬 Send Movie Name")
+
 
 async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -39,7 +42,7 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     runtime = data.get("Runtime")
     poster = data.get("Poster")
 
-    search = title.replace(" ","+")
+    search = title.replace(" ", "+")
 
     hdhub4u = f"https://new4.hdhub4u.fo/?s={search}"
     vegamovies = f"https://vegamoviesdl.com/?s={search}"
@@ -77,6 +80,7 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+
 async def servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
@@ -96,13 +100,21 @@ async def servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie))
 app.add_handler(CallbackQueryHandler(servers, pattern="servers"))
 
-print("Bot Running...")
+
+async def main():
+    print("Bot Running...")
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    await asyncio.Event().wait()
+
 
 if __name__ == "__main__":
-    app.run_polling()
+    asyncio.run(main())
