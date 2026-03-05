@@ -1,26 +1,25 @@
+from flask import Flask
+import threading
+import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-import requests
-import threading
-from flask import Flask
-import os
 
 TOKEN = "7432781768:AAEpyVpDOYcVaxi8v7SKUH7wuAvUiNFDb44"
 OMDB_API = "c5906b7b"
 
-# -------- WEB SERVER (PORT FIX FOR RENDER) --------
-web_app = Flask(__name__)
+# ---------------- FLASK SERVER (Render awake) ----------------
+app = Flask(__name__)
 
-@web_app.route("/")
+@app.route('/')
 def home():
-    return "Bot Running"
+    return "Bot is running"
 
 def run_web():
-    port = int(os.environ.get("PORT", 10000))
-    web_app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=10000)
 
 threading.Thread(target=run_web).start()
-# -----------------------------------------------
+
+# ---------------- TELEGRAM BOT ----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎬 Send Movie Name")
@@ -56,7 +55,7 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     runtime = data.get("Runtime")
     poster = data.get("Poster")
 
-    search = title.replace(" ", "+")
+    search = title.replace(" ","+")
 
     hdhub4u = f"https://new4.hdhub4u.fo/?s={search}"
     vegamovies = f"https://vegamoviesdl.com/?s={search}"
@@ -113,12 +112,19 @@ async def servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-app = ApplicationBuilder().token(TOKEN).build()
+# ---------------- RUN BOT ----------------
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie))
-app.add_handler(CallbackQueryHandler(servers, pattern="servers"))
+import asyncio
 
-print("Bot Running...")
+async def main():
+    bot = ApplicationBuilder().token(TOKEN).build()
 
-app.run_polling()
+    bot.add_handler(CommandHandler("start", start))
+    bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie))
+    bot.add_handler(CallbackQueryHandler(servers, pattern="servers"))
+
+    print("Bot Running...")
+    await bot.run_polling()
+
+if __name__ == "__main__":
+    asyncio.run(main())
