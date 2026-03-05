@@ -1,25 +1,26 @@
-from flask import Flask
-import threading
-import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+import requests
+import threading
+from flask import Flask
+import os
 
-TOKEN = "7432781768:AAEpyVpDOYcVaxi8v7SKUH7wuAvUiNFDb44"
+TOKEN = "8243013762:AAHgbvNwuKFMzKQhai0c2YkWG7vgM9QMCfw"
 OMDB_API = "c5906b7b"
 
-# ---------- Flask server (Render port fix) ----------
-app = Flask(__name__)
+# -------- WEB SERVER (PORT FIX FOR RENDER) --------
+web_app = Flask(__name__)
 
-@app.route("/")
+@web_app.route("/")
 def home():
-    return "Bot is running"
+    return "Bot Running"
 
-def run():
-    app.run(host="0.0.0.0", port=10000)
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    web_app.run(host="0.0.0.0", port=port)
 
-threading.Thread(target=run).start()
-
-# ---------- Telegram Bot ----------
+threading.Thread(target=run_web).start()
+# -------------------------------------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎬 Send Movie Name")
@@ -31,64 +32,94 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     name = update.message.text.strip()
 
-    msg = await update.message.reply_text("🔎 Searching movie...")
+    loading = await update.message.reply_text("🔎 Searching movie...")
 
     try:
-        url = f"http://www.omdbapi.com/?t={name}&apikey={OMDB_API}"
-        res = requests.get(url)
+        api = f"http://www.omdbapi.com/?t={name}&apikey={OMDB_API}"
+        res = requests.get(api, timeout=10)
         data = res.json()
     except:
-        await msg.edit_text("⚠ Server busy")
+        await loading.delete()
+        await update.message.reply_text("⚠ Server busy try again")
         return
+
+    await loading.delete()
 
     if data.get("Response") == "False":
-        await msg.edit_text("❌ Movie not found")
+        await update.message.reply_text("❌ Movie not found")
         return
 
-    title = data["Title"]
-    year = data["Year"]
-    rating = data["imdbRating"]
-    genre = data["Genre"]
-    runtime = data["Runtime"]
-    poster = data["Poster"]
+    title = data.get("Title")
+    year = data.get("Year")
+    rating = data.get("imdbRating")
+    genre = data.get("Genre")
+    runtime = data.get("Runtime")
+    poster = data.get("Poster")
 
     search = title.replace(" ", "+")
 
-    hdhub = f"https://new4.hdhub4u.fo/?s={search}"
+    # -------- Servers --------
+    hdhub4u = f"https://new4.hdhub4u.fo/?s={search}"
     vegamovies = f"https://vegamoviesdl.com/?s={search}"
+    moviews = f"https://moviews.xyz/?s={search}"
+    worldfree = f"https://worldfree4u.ist/?s={search}"
+    filmyzilla = f"https://www.filmyzilla32.com/?s={search}"
 
     trailer = f"https://www.youtube.com/results?search_query={search}+trailer"
 
-    buttons = [
-        [InlineKeyboardButton("🎥 Trailer", url=trailer)],
-        [InlineKeyboardButton("⬇ Download", url=hdhub)],
-        [InlineKeyboardButton("Server 2", url=vegamovies)]
+    context.user_data["servers"] = [vegamovies, moviews, worldfree, filmyzilla]
+
+    keyboard = [
+        [InlineKeyboardButton("🎥 Watch Trailer", url=trailer)],
+        [InlineKeyboardButton("⬇ Download Movie (Server 1)", url=hdhub4u)],
+        [InlineKeyboardButton("🌐 More Servers", callback_data="servers")]
     ]
 
-    text = f"""
+    caption = f"""
 🎬 {title} ({year})
 
-⭐ IMDb: {rating}
+⭐ IMDb Rating: {rating}
 🎭 Genre: {genre}
-⏱ Runtime: {runtime}
+🎥 Runtime: {runtime}
 
-━━━━━━━━━━━━
-🍿 Watch • Download
-━━━━━━━━━━━━
+━━━━━━━━━━━━━━
+🍿 Watch • Download • Enjoy
+━━━━━━━━━━━━━━
+
+⚠ Use Brave Browser for no ads
 """
 
     await update.message.reply_photo(
         photo=poster,
-        caption=text,
-        reply_markup=InlineKeyboardMarkup(buttons)
+        caption=caption,
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ---------- Run Bot ----------
+async def servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-bot = ApplicationBuilder().token(TOKEN).build()
+    query = update.callback_query
+    await query.answer()
 
-bot.add_handler(CommandHandler("start", start))
-bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie))
+    vegamovies, moviews, worldfree, filmyzilla = context.user_data["servers"]
+
+    keyboard = [
+        [InlineKeyboardButton("Server 2 Vegamovies", url=vegamovies)],
+        [InlineKeyboardButton("Server 3 Moviews", url=moviews)],
+        [InlineKeyboardButton("Server 4 WorldFree4u", url=worldfree)],
+        [InlineKeyboardButton("Server 5 Filmyzilla", url=filmyzilla)]
+    ]
+
+    await query.message.reply_text(
+        "🌐 Select Server:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+app = ApplicationBuilder().token(TOKEN).build()
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie))
+app.add_handler(CallbackQueryHandler(servers, pattern="servers"))
 
 print("Bot Running...")
-bot.run_polling()
+
+app.run_polling()
