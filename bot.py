@@ -4,11 +4,12 @@ import requests
 import threading
 from flask import Flask
 import os
+import re
 
 TOKEN = os.getenv("BOT_TOKEN")
 OMDB_API = os.getenv("OMDB_API")
 
-# ---------- WEB SERVER (Render keep alive) ----------
+# ---------- WEB SERVER (Render Keep Alive) ----------
 web_app = Flask(__name__)
 
 @web_app.route("/")
@@ -27,29 +28,47 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎬 Send Movie Name")
 
 
-# ---------- MOVIE SEARCH ----------
-
 async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    name = update.message.text.strip()
+    text = update.message.text.strip()
+
+    # invalid input check
+    if not re.search("[a-zA-Z]", text):
+        await update.message.reply_text(
+            "⚠ Send valid movie name\nExample: RRR, Avatar 2009"
+        )
+        return
+
+    loading = await update.message.reply_text("🔎 Searching movie...")
+
+    parts = text.split()
+
+    year = None
+    title = text
+
+    # optional year
+    if parts[-1].isdigit() and len(parts[-1]) == 4:
+        year = parts[-1]
+        title = " ".join(parts[:-1])
 
     try:
-        api = f"http://www.omdbapi.com/?t={name}&apikey={OMDB_API}"
-        res = requests.get(api, timeout=15)
+        if year:
+            api = f"http://www.omdbapi.com/?t={title}&y={year}&apikey={OMDB_API}"
+        else:
+            api = f"http://www.omdbapi.com/?t={title}&apikey={OMDB_API}"
 
-        if res.status_code != 200:
-            await update.message.reply_text("⚠ Movie server error")
-            return
-
+        res = requests.get(api, timeout=10)
         data = res.json()
 
     except Exception as e:
         print(e)
-        await update.message.reply_text("⚠ Server busy try again")
+        await loading.edit_text("⚠ Server busy try again")
         return
 
-    if data.get("Response") == "False":
-        await update.message.reply_text("❌ Movie not found")
+    if not data or data.get("Response") != "True":
+        await loading.edit_text(
+            "❌ Movie not found\n\nExample:\nRRR\nAvatar 2009\nBorder 1997"
+        )
         return
 
     title = data.get("Title")
@@ -64,14 +83,14 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     search = title.replace(" ","+")
 
-    # -------- SERVERS --------
+    # ---------- SERVERS ----------
     server1 = f"https://new4.hdhub4u.fo/?s={search}"
     server2 = f"https://123mkv.bar/?s={search}"
     server3 = f"https://mkvcinemas.sb/?s={search}"
     server4 = f"https://worldfree4u.ist/?s={search}"
     server5 = f"https://bolly4u.gifts/?s={search}"
     server6 = f"https://1filmyfly.org/?s={search}"
-    # -------------------------
+    # -----------------------------
 
     trailer = f"https://www.youtube.com/results?search_query={search}+trailer"
 
@@ -104,6 +123,8 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📢 <a href="https://t.me/Latestmovies4Ux">Join Latest Movie Channel</a>
 """
 
+    await loading.delete()
+
     await update.message.reply_photo(
         photo=poster,
         caption=caption,
@@ -111,8 +132,6 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-
-# ---------- MORE SERVERS ----------
 
 async def servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -134,8 +153,6 @@ async def servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-
-# ---------- BACK BUTTON ----------
 
 async def back(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -159,8 +176,6 @@ async def back(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-
-# ---------- BOT START ----------
 
 app = ApplicationBuilder().token(TOKEN).build()
 
