@@ -186,4 +186,7 @@ app.add_handler(CallbackQueryHandler(back, pattern="back"))
 
 print("Bot Running...")
 
-app.run_polling(drop_pending_updates=True)
+app.run_polling(
+    drop_pending_updates=True,
+    allowed_updates=Update.ALL_TYPES
+)
