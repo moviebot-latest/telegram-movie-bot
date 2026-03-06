@@ -4,12 +4,11 @@ import requests
 import threading
 from flask import Flask
 import os
-import asyncio
 
 TOKEN = os.getenv("BOT_TOKEN")
 OMDB_API = os.getenv("OMDB_API")
 
-# ---------- WEB SERVER FOR RENDER ----------
+# ---------- WEB SERVER (Render keep alive) ----------
 web_app = Flask(__name__)
 
 @web_app.route("/")
@@ -17,33 +16,37 @@ def home():
     return "Bot Running"
 
 def run_web():
-    port = int(os.environ.get("PORT", 10000))
+    port = int(os.environ.get("PORT",10000))
     web_app.run(host="0.0.0.0", port=port)
 
-threading.Thread(target=run_web).start()
-# -------------------------------------------
+threading.Thread(target=run_web, daemon=True).start()
+# ----------------------------------------------------
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎬 Send Movie Name")
 
 
+# ---------- MOVIE SEARCH ----------
+
 async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     name = update.message.text.strip()
 
-    loading = await update.message.reply_text("🔎 Searching movie...")
-
     try:
         api = f"http://www.omdbapi.com/?t={name}&apikey={OMDB_API}"
-        res = requests.get(api, timeout=5)
+        res = requests.get(api, timeout=15)
+
+        if res.status_code != 200:
+            await update.message.reply_text("⚠ Movie server error")
+            return
+
         data = res.json()
-    except:
-        await loading.delete()
+
+    except Exception as e:
+        print(e)
         await update.message.reply_text("⚠ Server busy try again")
         return
-
-    await loading.delete()
 
     if data.get("Response") == "False":
         await update.message.reply_text("❌ Movie not found")
@@ -59,20 +62,20 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if poster == "N/A":
         poster = "https://via.placeholder.com/300x450?text=No+Poster"
 
-    search = title.replace(" ", "+")
+    search = title.replace(" ","+")
 
-    # ---------- SERVERS ----------
+    # -------- SERVERS --------
     server1 = f"https://new4.hdhub4u.fo/?s={search}"
     server2 = f"https://123mkv.bar/?s={search}"
     server3 = f"https://mkvcinemas.sb/?s={search}"
     server4 = f"https://worldfree4u.ist/?s={search}"
     server5 = f"https://bolly4u.gifts/?s={search}"
     server6 = f"https://1filmyfly.org/?s={search}"
-    # -----------------------------
+    # -------------------------
 
     trailer = f"https://www.youtube.com/results?search_query={search}+trailer"
 
-    context.user_data["servers"] = [server1, server2, server3, server4, server5, server6]
+    context.user_data["servers"] = [server1,server2,server3,server4,server5,server6]
     context.user_data["trailer"] = trailer
 
     keyboard = [
@@ -97,11 +100,14 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ━━━━━━━━━━━━━━
 
 ⚠ Use Brave Browser for no ads
+
+📢 <a href="https://t.me/Latestmovies4Ux">Join Latest Movie Channel</a>
 """
 
     await update.message.reply_photo(
         photo=poster,
         caption=caption,
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -113,14 +119,7 @@ async def servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    anim = await query.message.reply_animation(
-        animation="https://media.giphy.com/media/3o7TKtnuHOHHUjR38Y/giphy.gif",
-        caption="🚀 Opening Servers..."
-    )
-
-    await asyncio.sleep(2)
-
-    s1, s2, s3, s4, s5, s6 = context.user_data["servers"]
+    s1,s2,s3,s4,s5,s6 = context.user_data["servers"]
 
     keyboard = [
         [InlineKeyboardButton("Server 2", url=s2)],
@@ -131,12 +130,9 @@ async def servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("⬅ Back", callback_data="back")]
     ]
 
-    await query.message.reply_text(
-        "🌐 More Download Servers:",
+    await query.edit_message_reply_markup(
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-
-    await anim.delete()
 
 
 # ---------- BACK BUTTON ----------
@@ -159,8 +155,7 @@ async def back(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     ]
 
-    await query.message.reply_text(
-        "🎬 Back to main menu",
+    await query.edit_message_reply_markup(
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -176,4 +171,4 @@ app.add_handler(CallbackQueryHandler(back, pattern="back"))
 
 print("Bot Running...")
 
-app.run_polling()
+app.run_polling(drop_pending_updates=True)
