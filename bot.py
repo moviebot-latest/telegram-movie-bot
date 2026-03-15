@@ -9,7 +9,10 @@ import re
 TOKEN = os.getenv("BOT_TOKEN")
 OMDB_API = os.getenv("OMDB_API")
 
-# ---------- WEB SERVER (Render Keep Alive) ----------
+movie_cache = {}
+users = set()
+
+# ---------- Render Keep Alive ----------
 web_app = Flask(__name__)
 
 @web_app.route("/")
@@ -21,53 +24,72 @@ def run_web():
     web_app.run(host="0.0.0.0", port=port)
 
 threading.Thread(target=run_web, daemon=True).start()
-# ----------------------------------------------------
+# --------------------------------------
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🎬 Send Movie Name")
+
+    users.add(update.message.from_user.id)
+
+    await update.message.reply_text(
+        "🎬 Send Movie Name\n\nExample:\nRRR\nAvatar 2009"
+    )
 
 
 async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
+    users.add(update.message.from_user.id)
+
     text = update.message.text.strip()
 
-    # invalid input check
+    # invalid input
     if not re.search("[a-zA-Z]", text):
         await update.message.reply_text(
-            "⚠ Send valid movie name\nExample: RRR, Avatar 2009"
+            "⚠ Send valid movie name\nExample: RRR"
         )
         return
+
+    # ---------- Hacker Animation ----------
+    await update.message.reply_animation(
+        animation=open("hacker_animation_v15_final_ultimate.mp4","rb")
+    )
+    # -------------------------------------
 
     loading = await update.message.reply_text("🔎 Searching movie...")
 
     parts = text.split()
-
     year = None
     title = text
 
-    # optional year
     if parts[-1].isdigit() and len(parts[-1]) == 4:
         year = parts[-1]
         title = " ".join(parts[:-1])
 
     try:
-        if year:
-            api = f"http://www.omdbapi.com/?t={title}&y={year}&apikey={OMDB_API}"
+
+        # cache system
+        if text in movie_cache:
+            data = movie_cache[text]
+
         else:
-            api = f"http://www.omdbapi.com/?t={title}&apikey={OMDB_API}"
 
-        res = requests.get(api, timeout=10)
-        data = res.json()
+            if year:
+                api = f"http://www.omdbapi.com/?t={title}&y={year}&apikey={OMDB_API}"
+            else:
+                api = f"http://www.omdbapi.com/?t={title}&apikey={OMDB_API}"
 
-    except Exception as e:
-        print(e)
+            res = requests.get(api, timeout=10)
+            data = res.json()
+
+            movie_cache[text] = data
+
+    except:
         await loading.edit_text("⚠ Server busy try again")
         return
 
     if not data or data.get("Response") != "True":
         await loading.edit_text(
-            "❌ Movie not found\n\nExample:\nRRR\nAvatar 2009\nBorder 1997"
+            "❌ Movie not found\n\nExample:\nRRR\nAvatar 2009"
         )
         return
 
@@ -83,7 +105,7 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     search = title.replace(" ","+")
 
-    # ---------- SERVERS ----------
+    # ---------- Servers ----------
     server1 = f"https://new4.hdhub4u.fo/?s={search}"
     server2 = f"https://123mkv.bar/?s={search}"
     server3 = f"https://mkvcinemas.sb/?s={search}"
@@ -113,6 +135,8 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ⭐ IMDb Rating: {rating}
 🎭 Genre: {genre}
 🎥 Runtime: {runtime}
+
+👥 Users: {len(users)}
 
 ━━━━━━━━━━━━━━
 🍿 Watch • Download • Enjoy
@@ -189,4 +213,4 @@ print("Bot Running...")
 app.run_polling(
     drop_pending_updates=True,
     allowed_updates=Update.ALL_TYPES
-)
+        )
