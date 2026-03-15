@@ -1,17 +1,19 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-import requests
+
+import re
 import threading
 from flask import Flask
-import os
-import re
-import asyncio
 
-TOKEN = os.getenv("BOT_TOKEN")
-OMDB_API = os.getenv("OMDB_API")
+from config import TOKEN, ADMIN_ID
+from movie_api import search_movie
+from servers import get_servers
+from animation import hacker_animation
 
-movie_cache = {}
-users = set()
+
+chat_ids = set()
+maintenance = False
+
 
 # ---------- Render Keep Alive ----------
 web_app = Flask(__name__)
@@ -21,8 +23,7 @@ def home():
     return "Bot Running"
 
 def run_web():
-    port = int(os.environ.get("PORT",10000))
-    web_app.run(host="0.0.0.0", port=port)
+    web_app.run(host="0.0.0.0", port=10000)
 
 threading.Thread(target=run_web, daemon=True).start()
 # --------------------------------------
@@ -30,107 +31,74 @@ threading.Thread(target=run_web, daemon=True).start()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    users.add(update.message.from_user.id)
+    chat_ids.add(update.effective_chat.id)
 
     await update.message.reply_text(
-        "🎬 Send Movie Name\n\nExample:\nRRR\nAvatar 2009"
+        "🎬 Send Movie Name\nExample:\nRRR\nAvatar 2009"
     )
 
 
 async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    users.add(update.message.from_user.id)
+    global maintenance
 
-    text = update.message.text.strip()
+    chat_ids.add(update.effective_chat.id)
 
-    # invalid input
-    if not re.search("[a-zA-Z]", text):
+    if maintenance:
+
         await update.message.reply_text(
-            "⚠ Send valid movie name\nExample: RRR"
+            "⚠ Server Maintenance\nTry again later"
         )
         return
 
-    # ---------- Hacker Animation ----------
-    try:
-        await update.message.reply_animation(
-            animation=open("hacker_animation_v15_final_ultimate.mp4","rb")
+    text = update.message.text.strip()
+
+    if not re.search("[a-zA-Z]", text):
+
+        await update.message.reply_text(
+            "⚠ Send valid movie name"
         )
+        return
 
-        # animation finish hone ka wait
-        await asyncio.sleep(10)
-
-    except Exception as e:
-        print(e)
-    # -------------------------------------
+    await hacker_animation(update)
 
     loading = await update.message.reply_text("🔎 Searching movie...")
 
     parts = text.split()
+
     year = None
     title = text
 
     if parts[-1].isdigit() and len(parts[-1]) == 4:
+
         year = parts[-1]
         title = " ".join(parts[:-1])
 
-    try:
-
-        # cache system
-        if text in movie_cache:
-            data = movie_cache[text]
-
-        else:
-
-            if year:
-                api = f"http://www.omdbapi.com/?t={title}&y={year}&apikey={OMDB_API}"
-            else:
-                api = f"http://www.omdbapi.com/?t={title}&apikey={OMDB_API}"
-
-            res = requests.get(api, timeout=10)
-            data = res.json()
-
-            movie_cache[text] = data
-
-    except:
-        await loading.edit_text("⚠ Server busy try again")
-        return
+    data = search_movie(title, year)
 
     if not data or data.get("Response") != "True":
-        await loading.edit_text(
-            "❌ Movie not found\n\nExample:\nRRR\nAvatar 2009"
-        )
+
+        await loading.edit_text("❌ Movie not found")
         return
 
-    title = data.get("Title")
-    year = data.get("Year")
-    rating = data.get("imdbRating")
-    genre = data.get("Genre")
-    runtime = data.get("Runtime")
-    poster = data.get("Poster")
+    title = data["Title"]
+    year = data["Year"]
+    rating = data["imdbRating"]
+    genre = data["Genre"]
+    runtime = data["Runtime"]
+    poster = data["Poster"]
 
-    if poster == "N/A":
-        poster = "https://via.placeholder.com/300x450?text=No+Poster"
+    servers = get_servers(title)
 
-    search = title.replace(" ","+")
+    trailer = f"https://www.youtube.com/results?search_query={title}+trailer"
 
-    # ---------- Servers ----------
-    server1 = f"https://new4.hdhub4u.fo/?s={search}"
-    server2 = f"https://123mkv.bar/?s={search}"
-    server3 = f"https://mkvcinemas.sb/?s={search}"
-    server4 = f"https://worldfree4u.ist/?s={search}"
-    server5 = f"https://bolly4u.gifts/?s={search}"
-    server6 = f"https://1filmyfly.org/?s={search}"
-    # -----------------------------
-
-    trailer = f"https://www.youtube.com/results?search_query={search}+trailer"
-
-    context.user_data["servers"] = [server1,server2,server3,server4,server5,server6]
+    context.user_data["servers"] = servers
     context.user_data["trailer"] = trailer
 
     keyboard = [
         [
             InlineKeyboardButton("🎬 Trailer", url=trailer),
-            InlineKeyboardButton("⬇ Download Server 1", url=server1)
+            InlineKeyboardButton("⬇ Download", url=servers[0])
         ],
         [
             InlineKeyboardButton("🌐 More Servers", callback_data="servers")
@@ -144,15 +112,9 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🎭 Genre: {genre}
 🎥 Runtime: {runtime}
 
-👥 Users: {len(users)}
-
-━━━━━━━━━━━━━━
-🍿 Watch • Download • Enjoy
-━━━━━━━━━━━━━━
-
 ⚠ Use Brave Browser for no ads
 
-📢 <a href="https://t.me/Latestmovies4Ux">Join Latest Movie Channel</a>
+📢 https://t.me/Latestmovies4Ux
 """
 
     await loading.delete()
@@ -160,7 +122,6 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_photo(
         photo=poster,
         caption=caption,
-        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -170,15 +131,14 @@ async def servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    s1,s2,s3,s4,s5,s6 = context.user_data["servers"]
+    s = context.user_data["servers"]
 
     keyboard = [
-        [InlineKeyboardButton("Server 2", url=s2)],
-        [InlineKeyboardButton("Server 3", url=s3)],
-        [InlineKeyboardButton("Server 4", url=s4)],
-        [InlineKeyboardButton("Server 5", url=s5)],
-        [InlineKeyboardButton("Server 6", url=s6)],
-        [InlineKeyboardButton("⬅ Back", callback_data="back")]
+        [InlineKeyboardButton("Server 2", url=s[1])],
+        [InlineKeyboardButton("Server 3", url=s[2])],
+        [InlineKeyboardButton("Server 4", url=s[3])],
+        [InlineKeyboardButton("Server 5", url=s[4])],
+        [InlineKeyboardButton("Server 6", url=s[5])]
     ]
 
     await query.edit_message_reply_markup(
@@ -186,39 +146,49 @@ async def servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ---------- Maintenance Commands ----------
 
-    query = update.callback_query
-    await query.answer()
+async def maintenance_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    s1 = context.user_data["servers"][0]
-    trailer = context.user_data["trailer"]
+    global maintenance
 
-    keyboard = [
-        [
-            InlineKeyboardButton("🎬 Trailer", url=trailer),
-            InlineKeyboardButton("⬇ Download Server 1", url=s1)
-        ],
-        [
-            InlineKeyboardButton("🌐 More Servers", callback_data="servers")
-        ]
-    ]
+    if update.message.from_user.id != ADMIN_ID:
+        return
 
-    await query.edit_message_reply_markup(
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    maintenance = True
+
+    for chat in chat_ids:
+        try:
+            await context.bot.send_message(chat, "⚠ Server Maintenance")
+        except:
+            pass
+
+
+async def maintenance_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    global maintenance
+
+    if update.message.from_user.id != ADMIN_ID:
+        return
+
+    maintenance = False
+
+    for chat in chat_ids:
+        try:
+            await context.bot.send_message(chat, "✅ Server Online")
+        except:
+            pass
 
 
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("maintenance_on", maintenance_on))
+app.add_handler(CommandHandler("maintenance_off", maintenance_off))
+
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie))
 app.add_handler(CallbackQueryHandler(servers, pattern="servers"))
-app.add_handler(CallbackQueryHandler(back, pattern="back"))
 
 print("Bot Running...")
 
-app.run_polling(
-    drop_pending_updates=True,
-    allowed_updates=Update.ALL_TYPES
-    )
+app.run_polling()
