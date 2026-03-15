@@ -5,6 +5,7 @@ import threading
 from flask import Flask
 import os
 import re
+import asyncio
 
 TOKEN = os.getenv("BOT_TOKEN")
 OMDB_API = os.getenv("OMDB_API")
@@ -50,9 +51,16 @@ async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ---------- Hacker Animation ----------
-    await update.message.reply_animation(
-        animation=open("hacker_animation_v15_final_ultimate.mp4","rb")
-    )
+    try:
+        await update.message.reply_animation(
+            animation=open("hacker_animation_v15_final_ultimate.mp4","rb")
+        )
+
+        # animation finish hone ka wait
+        await asyncio.sleep(10)
+
+    except Exception as e:
+        print(e)
     # -------------------------------------
 
     loading = await update.message.reply_text("🔎 Searching movie...")
@@ -213,4 +221,4 @@ print("Bot Running...")
 app.run_polling(
     drop_pending_updates=True,
     allowed_updates=Update.ALL_TYPES
-        )
+    )
