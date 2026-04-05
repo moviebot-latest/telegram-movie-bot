@@ -1,850 +1,478 @@
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, ConversationHandler
+import requests
+import threading
+import json
 import os
-import time
-import math
 import asyncio
-import random
-from pyrogram import Client, filters
-from pyrogram.errors import FloodWait, MessageNotModified
+from flask import Flask
 
-API_ID    = int(os.getenv("API_ID"))
-API_HASH  = os.getenv("API_HASH")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+TOKEN    = os.getenv("BOT_TOKEN")
+OMDB_API = os.getenv("OMDB_API")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-app = Client(
-    "ultra-bot",
-    api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN,
+# ═══════════════════════════════════════
+#         WEB SERVER (RENDER KEEP ALIVE)
+# ═══════════════════════════════════════
+web_app = Flask(__name__)
+
+@web_app.route("/")
+def home():
+    return "🎬 CineBot Running"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    web_app.run(host="0.0.0.0", port=port)
+
+threading.Thread(target=run_web, daemon=True).start()
+
+
+# ═══════════════════════════════════════
+#         PERSISTENT STORAGE (JSON)
+# ═══════════════════════════════════════
+SERVERS_FILE = "servers.json"
+
+DEFAULT_SERVERS = {
+    "s1": {"name": "HdHub4u",     "url": "https://new4.hdhub4u.fo/?s="},
+    "s2": {"name": "123Mkv",      "url": "https://123mkv.bar/?s="},
+    "s3": {"name": "MkvCinemas",  "url": "https://mkvcinemas.sb/?s="},
+    "s4": {"name": "WorldFree4u", "url": "https://worldfree4u.ist/?s="},
+    "s5": {"name": "Bolly4u",     "url": "https://bolly4u.gifts/?s="},
+}
+
+def load_servers() -> dict:
+    """File se servers load karo, file nahi hai to default use karo"""
+    if os.path.exists(SERVERS_FILE):
+        try:
+            with open(SERVERS_FILE, "r") as f:
+                data = json.load(f)
+                # Naye keys missing ho to default se fill karo
+                for k, v in DEFAULT_SERVERS.items():
+                    if k not in data:
+                        data[k] = v.copy()
+                return data
+        except:
+            pass
+    # File nahi hai — default copy karke save karo
+    save_servers(DEFAULT_SERVERS)
+    return {k: v.copy() for k, v in DEFAULT_SERVERS.items()}
+
+def save_servers(data: dict):
+    """Servers ko file me save karo (permanent)"""
+    with open(SERVERS_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+def reset_servers():
+    """Sab servers default pe reset karo"""
+    data = {k: v.copy() for k, v in DEFAULT_SERVERS.items()}
+    save_servers(data)
+    return data
+
+# ── Bot start hote hi load karo ──
+bot_servers = load_servers()
+
+
+# ═══════════════════════════════════════
+#              ANIMATIONS
+# ═══════════════════════════════════════
+SEARCH_FRAMES = ["🔍 S•e•a•r•c•h•i•n•g .", "🔍 S•e•a•r•c•h•i•n•g ..", "🎬 F•o•u•n•d !"]
+SERVER_FRAMES = ["🌐 Connecting .  ", "🌐 Connecting .. ", "🌐 Connecting ...", "⚡ Servers Ready!"]
+BACK_FRAMES   = ["🔄 Going Back .  ", "🔄 Going Back .. ", "🎬 Back to Movie!"]
+SAVE_FRAMES   = ["💾 Saving .  ", "💾 Saving .. ", "✅ Saved!"]
+
+# ConversationHandler states
+WAITING_URL, WAITING_NAME = range(2)
+
+
+# ═══════════════════════════════════════
+#           ADMIN CHECK
+# ═══════════════════════════════════════
+def is_admin(user_id: int) -> bool:
+    return user_id == ADMIN_ID
+
+
+# ═══════════════════════════════════════
+#                START
+# ═══════════════════════════════════════
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin_note = "\n\n🔧 *Admin:* Use /admin to manage servers." if is_admin(update.effective_user.id) else ""
+    await update.message.reply_text(
+        "🎬 *Welcome to CineBot!*\n\n"
+        "Send any *Movie Name* to get:\n"
+        "• 📽 Poster + Details\n"
+        "• ⭐ IMDb Rating\n"
+        "• 🎥 Trailer Link\n"
+        "• ⬇️ Fast Download Servers\n\n"
+        "🔎 *Just type a movie name...*" + admin_note,
+        parse_mode="Markdown"
+    )
+
+
+# ═══════════════════════════════════════
+#          ADMIN PANEL — /admin
+# ═══════════════════════════════════════
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("🚫 *Access Denied!*", parse_mode="Markdown")
+        return
+
+    # Fresh load from file
+    global bot_servers
+    bot_servers = load_servers()
+
+    text  = "🔧 *Admin Panel — Server Manager*\n\n"
+    text += "📋 *Current Active Servers:*\n"
+    text += "─────────────────────────\n"
+    for i in range(1, 6):
+        key = f"s{i}"
+        text += f"*{i}.* _{bot_servers[key]['name']}_\n`{bot_servers[key]['url']}`\n\n"
+    text += "─────────────────────────\n"
+    text += "🖊 Tap a server to edit it 👇"
+
+    keyboard = [
+        [InlineKeyboardButton(
+            f"✏️ Server {i} — {bot_servers[f's{i}']['name']}",
+            callback_data=f"admin_edit_s{i}"
+        )]
+        for i in range(1, 6)
+    ]
+    keyboard.append([InlineKeyboardButton("🔄 Reset All to Default", callback_data="admin_reset")])
+
+    await update.message.reply_text(
+        text,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+# ═══════════════════════════════════════
+#       ADMIN — EDIT BUTTON PRESSED
+# ═══════════════════════════════════════
+async def admin_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        await query.answer("🚫 Access Denied!", show_alert=True)
+        return ConversationHandler.END
+
+    server_key = query.data.replace("admin_edit_", "")  # "s1" .. "s5"
+    context.user_data["editing_server"] = server_key
+
+    val = bot_servers[server_key]
+    num = server_key[1]
+
+    await query.message.reply_text(
+        f"✏️ *Editing Server {num} — {val['name']}*\n\n"
+        f"🔗 *Current URL:*\n`{val['url']}`\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📝 *Send new website URL*\n"
+        f"Format: `https://newsite.com/?s=`\n\n"
+        f"_(Search term auto-attach hogi end mein)_\n\n"
+        f"/cancel — Cancel karne ke liye",
+        parse_mode="Markdown"
+    )
+
+    return WAITING_URL
+
+
+# ═══════════════════════════════════════
+#       ADMIN — NEW URL RECEIVE
+# ═══════════════════════════════════════
+async def admin_receive_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+
+    new_url = update.message.text.strip()
+
+    if not new_url.startswith("http"):
+        await update.message.reply_text(
+            "❌ *Invalid URL!*\n\n"
+            "Must start with `http://` or `https://`\n\n"
+            "Try again or /cancel",
+            parse_mode="Markdown"
+        )
+        return WAITING_URL
+
+    context.user_data["new_url"] = new_url
+    server_key   = context.user_data.get("editing_server")
+    current_name = bot_servers[server_key]["name"]
+
+    await update.message.reply_text(
+        f"✅ *URL noted!*\n`{new_url}`\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📝 *Now send the display name*\n"
+        f"Current: `{current_name}`\n\n"
+        f"_(Same name rakhna ho to wahi bhejo)_\n\n"
+        f"/cancel — Cancel karne ke liye",
+        parse_mode="Markdown"
+    )
+
+    return WAITING_NAME
+
+
+# ═══════════════════════════════════════
+#       ADMIN — NEW NAME RECEIVE + SAVE
+# ═══════════════════════════════════════
+async def admin_receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+
+    global bot_servers
+
+    new_name   = update.message.text.strip()
+    new_url    = context.user_data.get("new_url")
+    server_key = context.user_data.get("editing_server")
+    num        = server_key[1]
+
+    # ── Saving animation ──
+    loader = await update.message.reply_text(SAVE_FRAMES[0])
+    for frame in SAVE_FRAMES[1:]:
+        await asyncio.sleep(0.6)
+        await loader.edit_text(frame)
+
+    # ── Update memory ──
+    bot_servers[server_key]["url"]  = new_url
+    bot_servers[server_key]["name"] = new_name
+
+    # ── Save to file (PERMANENT) ──
+    save_servers(bot_servers)
+
+    await asyncio.sleep(0.4)
+    await loader.delete()
+
+    await update.message.reply_text(
+        f"🎉 *Server {num} Updated & Saved!*\n\n"
+        f"🏷 *Name:* `{new_name}`\n"
+        f"🔗 *URL:* `{new_url}`\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"✅ Permanently saved — bot restart ke baad bhi active rahega\n"
+        f"🎬 Naye movie searches abhi se yahi link use karenge\n\n"
+        f"/admin — Panel wapas kholne ke liye",
+        parse_mode="Markdown"
+    )
+
+    return ConversationHandler.END
+
+
+# ═══════════════════════════════════════
+#       ADMIN — RESET ALL
+# ═══════════════════════════════════════
+async def admin_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        await query.answer("🚫 Access Denied!", show_alert=True)
+        return
+
+    global bot_servers
+    bot_servers = reset_servers()  # Default pe reset + file me save
+
+    text = "🔄 *All Servers Reset to Default!*\n\n"
+    for i in range(1, 6):
+        text += f"*{i}.* _{DEFAULT_SERVERS[f's{i}']['name']}_\n`{DEFAULT_SERVERS[f's{i}']['url']}`\n\n"
+    text += "✅ *Saved permanently.*\n/admin — Panel kholne ke liye"
+
+    await query.message.reply_text(text, parse_mode="Markdown")
+
+
+# ═══════════════════════════════════════
+#              CANCEL
+# ═══════════════════════════════════════
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "❌ *Cancelled.* Koi changes save nahi hue.\n\n/admin — Panel kholne ke liye",
+        parse_mode="Markdown"
+    )
+    return ConversationHandler.END
+
+
+# ═══════════════════════════════════════
+#            MOVIE SEARCH
+# ═══════════════════════════════════════
+async def movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name   = update.message.text.strip()
+    loader = await update.message.reply_text(SEARCH_FRAMES[0])
+
+    await asyncio.sleep(0.7)
+    await loader.edit_text(SEARCH_FRAMES[1])
+    await asyncio.sleep(0.7)
+
+    try:
+        res  = requests.get(f"http://www.omdbapi.com/?t={name}&apikey={OMDB_API}", timeout=5)
+        data = res.json()
+    except:
+        await loader.edit_text("⚠️ Server busy, try again later.")
+        return
+
+    if data.get("Response") == "False":
+        await loader.edit_text("❌ *Movie not found!*\n\nCheck spelling and try again.", parse_mode="Markdown")
+        return
+
+    await loader.edit_text(SEARCH_FRAMES[2])
+    await asyncio.sleep(0.5)
+    await loader.delete()
+
+    title    = data.get("Title",      "N/A")
+    year     = data.get("Year",       "N/A")
+    rating   = data.get("imdbRating", "N/A")
+    genre    = data.get("Genre",      "N/A")
+    runtime  = data.get("Runtime",    "N/A")
+    director = data.get("Director",   "N/A")
+    actors   = data.get("Actors",     "N/A")
+    plot     = data.get("Plot",       "N/A")
+    language = data.get("Language",   "N/A")
+    poster   = data.get("Poster",     "N/A")
+    votes    = data.get("imdbVotes",  "N/A")
+
+    if poster == "N/A" or not poster:
+        poster = "https://i.imgur.com/8qH7Z8L.jpeg"
+
+    try:
+        star_bar = "⭐" * int(float(rating)) + "☆" * (10 - int(float(rating)))
+    except:
+        star_bar = "N/A"
+
+    search = title.replace(" ", "+")
+
+    # ── Current active servers use karo ──
+    urls  = [bot_servers[f"s{i}"]["url"] + search for i in range(1, 6)]
+    names = [bot_servers[f"s{i}"]["name"]          for i in range(1, 6)]
+    trailer = f"https://www.youtube.com/results?search_query={search}+trailer"
+
+    caption = (
+        f"🎬 *{title}* `({year})`\n\n"
+        f"{star_bar}\n"
+        f"⭐ *IMDb:* `{rating}/10`  •  🗳 *Votes:* `{votes}`\n\n"
+        f"🎭 *Genre:* `{genre}`\n"
+        f"⏱ *Runtime:* `{runtime}`\n"
+        f"🌍 *Language:* `{language}`\n"
+        f"🎥 *Director:* `{director}`\n"
+        f"🎭 *Cast:* `{actors}`\n\n"
+        f"📖 *Plot:*\n_{plot}_\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"⚡ *Fast servers available below*\n"
+        f"🦁 *Use Brave Browser for No Ads*"
+    )
+
+    sent = await update.message.reply_photo(
+        photo=poster,
+        caption=caption,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎬 Watch Trailer", url=trailer)],
+            [InlineKeyboardButton(f"⬇️ Fast Download — {names[0]}", url=urls[0])],
+            [InlineKeyboardButton("🌐 More Servers", callback_data="servers_tmp")]
+        ])
+    )
+
+    msg_id = str(sent.message_id)
+    context.user_data[msg_id] = {
+        "servers": urls,
+        "names":   names,
+        "trailer": trailer,
+        "title":   title
+    }
+
+    await sent.edit_reply_markup(reply_markup=InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎬 Watch Trailer", url=trailer)],
+        [InlineKeyboardButton(f"⬇️ Fast Download — {names[0]}", url=urls[0])],
+        [InlineKeyboardButton("🌐 More Servers", callback_data=f"servers_{msg_id}")]
+    ]))
+
+
+# ═══════════════════════════════════════
+#           MORE SERVERS
+# ═══════════════════════════════════════
+async def servers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("🌐 Loading servers...")
+
+    msg_id     = query.data.split("_", 1)[1]
+    movie_data = context.user_data.get(msg_id)
+
+    if not movie_data:
+        await query.message.reply_text("⚠️ Session expired. Search the movie again.")
+        return
+
+    loader = await query.message.reply_text(SERVER_FRAMES[0])
+    for frame in SERVER_FRAMES[1:]:
+        await asyncio.sleep(0.7)
+        await loader.edit_text(frame)
+    await asyncio.sleep(0.4)
+    await loader.delete()
+
+    urls   = movie_data["servers"]
+    names  = movie_data["names"]
+    title  = movie_data["title"]
+    medals = ["🥇", "🥈", "🥉", "🏅", "🎖"]
+
+    keyboard = [[InlineKeyboardButton(f"{medals[i]} {names[i]}", url=urls[i])] for i in range(5)]
+    keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data=f"back_{msg_id}")])
+
+    await query.message.reply_text(
+        f"🌐 *Download Servers for:*\n🎬 _{title}_\n\n"
+        "Pick any server 👇\n"
+        "🦁 *Brave Browser = No Ads*",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+# ═══════════════════════════════════════
+#               BACK
+# ═══════════════════════════════════════
+async def back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("🔄 Going back...")
+
+    msg_id     = query.data.split("_", 1)[1]
+    movie_data = context.user_data.get(msg_id)
+
+    if not movie_data:
+        await query.message.reply_text("⚠️ Session expired. Search the movie again.")
+        return
+
+    loader = await query.message.reply_text(BACK_FRAMES[0])
+    for frame in BACK_FRAMES[1:]:
+        await asyncio.sleep(0.7)
+        await loader.edit_text(frame)
+    await asyncio.sleep(0.4)
+    await loader.delete()
+
+    await query.message.reply_text(
+        f"🎬 *Back to:* _{movie_data['title']}_",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎬 Watch Trailer", url=movie_data["trailer"])],
+            [InlineKeyboardButton(f"⬇️ Fast Download — {movie_data['names'][0]}", url=movie_data["servers"][0])],
+            [InlineKeyboardButton("🌐 More Servers", callback_data=f"servers_{msg_id}")]
+        ])
+    )
+
+
+# ═══════════════════════════════════════
+#             BOT START
+# ═══════════════════════════════════════
+app = ApplicationBuilder().token(TOKEN).build()
+
+admin_conv = ConversationHandler(
+    entry_points=[CallbackQueryHandler(admin_edit, pattern="^admin_edit_")],
+    states={
+        WAITING_URL:  [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_receive_url)],
+        WAITING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_receive_name)],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
 )
 
-DOWNLOAD_DIR = "downloads"
-THUMB_DIR    = "thumbs"
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-os.makedirs(THUMB_DIR,    exist_ok=True)
-
-
-# ══════════════════════════════════════════════════════════════
-#  PER-USER STATE
-# ══════════════════════════════════════════════════════════════
-user_files:  dict[int, str]           = {}
-user_locks:  dict[int, asyncio.Lock]  = {}
-user_cancel: dict[int, asyncio.Event] = {}
-user_status: dict[int, dict]          = {}
-
-_seen_msgs: set[int]     = set()
-_seen_lock: asyncio.Lock = asyncio.Lock()
-
-def _get_lock(uid: int) -> asyncio.Lock:
-    if uid not in user_locks:
-        user_locks[uid] = asyncio.Lock()
-    return user_locks[uid]
-
-def _get_cancel(uid: int) -> asyncio.Event:
-    if uid not in user_cancel:
-        user_cancel[uid] = asyncio.Event()
-    return user_cancel[uid]
-
-def _set_status(uid: int, task: str, detail: str = "") -> None:
-    user_status[uid] = {"task": task, "detail": detail, "since": time.time()}
-
-def _clear_status(uid: int) -> None:
-    user_status.pop(uid, None)
-
-async def _dedup(mid: int) -> bool:
-    async with _seen_lock:
-        if mid in _seen_msgs:
-            return True
-        _seen_msgs.add(mid)
-        if len(_seen_msgs) > 300:
-            _seen_msgs.clear()
-        return False
-
-
-# ══════════════════════════════════════════════════════════════
-#  ANIMATION FRAMES & VISUAL CONSTANTS
-# ══════════════════════════════════════════════════════════════
-
-# Cinematic spinners
-SPINNER_ORBIT    = ["◜","◝","◞","◟"]
-SPINNER_PULSE    = ["◉","○","◉","○"]
-SPINNER_MATRIX   = ["▓","▒","░"," ","░","▒","▓"]
-SPINNER_RADAR    = ["◴","◷","◶","◵"]
-SPINNER_BOUNCE   = ["⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"]
-SPINNER_WAVE     = ["〰","≈","∿","〰","≈"]
-SPINNER_SIGNAL   = ["▁","▂","▃","▄","▅","▆","▇","█","▇","▆","▅","▄","▃","▂"]
-SPINNER_CUBE     = ["▪","▫","▪","▫"]
-SPINNER_PHASE    = ["🌑","🌒","🌓","🌔","🌕","🌖","🌗","🌘"]
-SPINNER_CLOCK    = ["🕐","🕑","🕒","🕓","🕔","🕕","🕖","🕗","🕘","🕙","🕚","🕛"]
-SPINNER_DOTS_V2  = ["⣀","⣄","⣤","⣦","⣶","⣷","⣿","⣷","⣶","⣦","⣤","⣄"]
-
-# Download uses BOUNCE, Upload uses SIGNAL
-DOWNLOAD_SPINNER = SPINNER_BOUNCE
-UPLOAD_SPINNER   = SPINNER_SIGNAL
-
-# Animated bar styles
-BAR_STYLES = {
-    "classic":  ("█", "░"),
-    "smooth":   ("▰", "▱"),
-    "gradient": ("▓", "░"),
-    "block":    ("■", "□"),
-    "sharp":    ("━", "─"),
-    "circuit":  ("◼", "◻"),
-    "wave":     ("≣", "≡"),
-}
-
-# Milestones
-MILESTONES = {
-    100: ("🏆", "COMPLETE"),
-    90:  ("🔥", "BLAZING"),
-    75:  ("⚡", "LIGHTNING"),
-    50:  ("🚀", "CRUISING"),
-    25:  ("💫", "RISING"),
-    10:  ("🌀", "SPINNING"),
-    0:   ("🔵", "STARTING"),
-}
-
-TIER_COLORS = {
-    "🟢 ULTRA":  (10 * 1024 * 1024, "🟢 ██ ULTRA ██"),
-    "🟩 FAST":   (5  * 1024 * 1024, "🟩 ▓▓ FAST  ▓▓"),
-    "🟡 GOOD":   (1  * 1024 * 1024, "🟡 ▒▒ GOOD  ▒▒"),
-    "🟠 OK":     (512 * 1024,       "🟠 ░░ OK    ░░"),
-    "🔴 SLOW":   (0,                "🔴 ·· SLOW  ··"),
-}
-
-THROTTLE  = 0.15   # slightly faster refresh
-EMA_ALPHA = 0.35
-
-
-# ══════════════════════════════════════════════════════════════
-#  INTERNAL PROGRESS STATE
-# ══════════════════════════════════════════════════════════════
-_last_edit:  dict[int, float] = {}
-_ema_speed:  dict[int, float] = {}
-_spin_idx:   dict[int, int]   = {}
-_shown_pct:  dict[int, float] = {}
-_frame_tick: dict[int, int]   = {}   # generic frame counter
-
-def _reset(uid: int) -> None:
-    for d in (_last_edit, _ema_speed, _spin_idx, _shown_pct, _frame_tick):
-        d.pop(uid, None)
-
-
-# ══════════════════════════════════════════════════════════════
-#  UTILITY FORMATTERS
-# ══════════════════════════════════════════════════════════════
-def _sz(b: float) -> str:
-    for u in ("B","KB","MB","GB"):
-        if b < 1024: return f"{b:.1f} {u}"
-        b /= 1024
-    return f"{b:.1f} TB"
-
-def _eta(s: float) -> str:
-    s = max(0, s)
-    if s >= 3600: return f"{int(s//3600)}h {int(s%3600//60)}m {int(s%60)}s"
-    if s >= 60:   return f"{int(s//60)}m {int(s%60)}s"
-    return f"{int(s)}s"
-
-def _speed_tier(bps: float) -> str:
-    for label, (threshold, display) in TIER_COLORS.items():
-        if bps >= threshold:
-            return display
-    return TIER_COLORS["🔴 SLOW"][1]
-
-def _milestone(pct: float) -> tuple[str, str]:
-    for thresh, (icon, label) in sorted(MILESTONES.items(), reverse=True):
-        if pct >= thresh:
-            return icon, label
-    return "🔵", "STARTING"
-
-def _bar(pct: float, width: int = 18, style: str = "smooth") -> str:
-    fill, empty = BAR_STYLES.get(style, BAR_STYLES["smooth"])
-    n = int(min(pct, 100) / 100 * width)
-    return fill * n + empty * (width - n)
-
-def _animated_bar(pct: float, tick: int, width: int = 18) -> str:
-    """Shimmer effect — leading edge pulses."""
-    filled, empty = BAR_STYLES["smooth"]
-    n = int(min(pct, 100) / 100 * width)
-    if n == 0:
-        return empty * width
-    # Shimmer on leading character
-    leader = "▸" if tick % 2 == 0 else "▹"
-    if n >= width:
-        return filled * width
-    return filled * (n - 1) + leader + empty * (width - n)
-
-def _count_up(uid: int, real: float, step: float = 2.0) -> float:
-    prev  = _shown_pct.get(uid, 0.0)
-    shown = min(real, prev + step) if real > prev else real
-    _shown_pct[uid] = shown
-    return shown
-
-def _mini_graph(speeds: list[float], width: int = 10) -> str:
-    """Tiny sparkline from recent speed samples."""
-    bars = " ▁▂▃▄▅▆▇█"
-    if not speeds: return "─" * width
-    mx = max(speeds) or 1
-    return "".join(bars[min(8, int(s / mx * 8))] for s in speeds[-width:])
-
-
-# ══════════════════════════════════════════════════════════════
-#  SAFE EDIT
-# ══════════════════════════════════════════════════════════════
-async def _safe_edit(msg, text: str) -> None:
-    try:
-        await msg.edit(text)
-    except FloodWait as e:
-        await asyncio.sleep(e.value + 0.5)
-        try: await msg.edit(text)
-        except Exception: pass
-    except MessageNotModified:
-        pass
-    except Exception:
-        pass
-
-
-# ══════════════════════════════════════════════════════════════
-#  SPEED HISTORY (per user, rolling 20 samples)
-# ══════════════════════════════════════════════════════════════
-_speed_history: dict[int, list[float]] = {}
-
-def _record_speed(uid: int, bps: float) -> None:
-    if uid not in _speed_history:
-        _speed_history[uid] = []
-    _speed_history[uid].append(bps)
-    if len(_speed_history[uid]) > 20:
-        _speed_history[uid].pop(0)
-
-def _get_speed_history(uid: int) -> list[float]:
-    return _speed_history.get(uid, [])
-
-
-# ══════════════════════════════════════════════════════════════
-#  PROGRESS ENGINE v7  — Cinematic, animated, feature-rich
-# ══════════════════════════════════════════════════════════════
-async def progress(
-    current: int, total: int,
-    msg, start: float,
-    uid: int = 0, mode: str = "📥 Download",
-) -> None:
-    if not isinstance(total, (int, float)) or total <= 0: return
-    if _get_cancel(uid).is_set(): return
-
-    now     = time.time()
-    elapsed = max(now - start, 0.001)
-
-    if now - _last_edit.get(uid, 0.0) < THROTTLE and _last_edit.get(uid, 0.0) != 0.0:
-        return
-    _last_edit[uid] = now
-
-    # EMA speed
-    raw = current / elapsed
-    ema = EMA_ALPHA * raw + (1 - EMA_ALPHA) * _ema_speed.get(uid, raw)
-    _ema_speed[uid] = ema
-    _record_speed(uid, ema)
-
-    eta_s = (total - current) / ema if ema > 0 else 0
-    real  = current * 100 / total
-    shown = _count_up(uid, real)
-
-    # Animation tick
-    tick = _frame_tick.get(uid, 0)
-    _frame_tick[uid] = tick + 1
-
-    # Spinner selection
-    spinner_frames = DOWNLOAD_SPINNER if "Download" in mode else UPLOAD_SPINNER
-    spin = spinner_frames[tick % len(spinner_frames)]
-
-    # Visual elements
-    abar          = _animated_bar(shown, tick, 18)
-    icon, tier_lbl = _milestone(shown)
-    speed_tier    = _speed_tier(ema)
-    graph         = _mini_graph(_get_speed_history(uid), 12)
-    pct_int       = int(shown)
-    pct_tenths    = int((shown - pct_int) * 10)
-
-    # Percentage as digit-style display
-    pct_display = f"{pct_int:>3}.{pct_tenths}%"
-
-    # ETA with urgency cue
-    if eta_s < 10 and shown > 10:
-        eta_str = f"⚡`{_eta(eta_s)}`"
-    else:
-        eta_str = f"`{_eta(eta_s)}`"
-
-    is_download = "Download" in mode
-    header_char = "📥" if is_download else "📤"
-
-    text = (
-        f"{spin} **{mode}**\n"
-        f"══════════════════════════\n"
-        f"`{abar}`\n"
-        f"  {icon} **{pct_display}** — {tier_lbl}\n"
-        f"──────────────────────────\n"
-        f"  📊 `{graph}` ← speed graph\n"
-        f"──────────────────────────\n"
-        f"  {header_char} **Size**    `{_sz(current)}` / `{_sz(total)}`\n"
-        f"  ⚡ **Speed**   {speed_tier}\n"
-        f"         `{_sz(ema)}/s`\n"
-        f"  ⏱ **ETA**    {eta_str}\n"
-        f"  ⏳ **Elapsed** `{_eta(elapsed)}`\n"
-        f"══════════════════════════\n"
-        f"  ❌ /cancel to abort"
-    )
-    await _safe_edit(msg, text)
-
-
-async def upload_progress(current, total, msg, start, uid=0):
-    await progress(current, total, msg, start, uid=uid, mode="📤 Upload")
-
-
-# ══════════════════════════════════════════════════════════════
-#  ASYNC FFMPEG + THUMBNAIL + DURATION
-# ══════════════════════════════════════════════════════════════
-async def ffmpeg_cut(inp: str, out: str, ss: float, t: float) -> bool:
-    proc = await asyncio.create_subprocess_exec(
-        "ffmpeg", "-y", "-ss", str(ss), "-i", inp,
-        "-t", str(t), "-c", "copy", "-avoid_negative_ts", "make_zero", out,
-        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
-    )
-    await proc.wait()
-    return proc.returncode == 0
-
-async def make_thumb(video: str, ss: float, out: str) -> str | None:
-    proc = await asyncio.create_subprocess_exec(
-        "ffmpeg", "-y", "-ss", str(ss), "-i", video,
-        "-vframes", "1", "-q:v", "2", "-vf", "scale=320:-1", out,
-        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
-    )
-    await proc.wait()
-    return out if os.path.exists(out) else None
-
-async def get_duration(file: str) -> float | None:
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "ffprobe", "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1", file,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-        )
-        out, _ = await proc.communicate()
-        return float(out.decode().strip())
-    except Exception:
-        return None
-
-
-# ══════════════════════════════════════════════════════════════
-#  ANIMATED SPLIT PROGRESS
-# ══════════════════════════════════════════════════════════════
-_split_tick: dict[int, int] = {}
-
-async def _split_update(msg, done: int, total: int, uid: int, note: str = "") -> None:
-    pct  = done * 100 // total
-    tick = _split_tick.get(uid, 0)
-    _split_tick[uid] = tick + 1
-
-    spin  = SPINNER_ORBIT[tick % len(SPINNER_ORBIT)]
-    abar  = _animated_bar(pct, tick, 16)
-    note_line = f"\n  ┗ _{note}_" if note else ""
-
-    # Part indicators  e.g.  ✅ ✅ ✂️ ○ ○
-    indicators = ""
-    for i in range(total):
-        if i < done:
-            indicators += "✅"
-        elif i == done:
-            indicators += "✂️"
-        else:
-            indicators += "○"
-        if (i + 1) % 10 == 0 and i + 1 < total:
-            indicators += "\n  "
-
-    await _safe_edit(msg,
-        f"{spin} **Splitting…**\n"
-        f"══════════════════════════\n"
-        f"`{abar}` **{pct}%**\n"
-        f"  Part **{done}** / **{total}** done{note_line}\n"
-        f"──────────────────────────\n"
-        f"  {indicators}\n"
-        f"══════════════════════════\n"
-        f"  ❌ /cancel to stop"
-    )
-
-
-# ══════════════════════════════════════════════════════════════
-#  ANIMATED FFMPEG PROGRESS (optional)
-# ══════════════════════════════════════════════════════════════
-async def _ffmpeg_progress_watch(msg, uid: int, duration: float, part: int, total: int) -> None:
-    """Animated 'cutting' display while ffmpeg runs (no real feedback — just cosmetic)."""
-    frames = SPINNER_WAVE
-    tick   = 0
-    while True:
-        if _get_cancel(uid).is_set():
-            return
-        spin = frames[tick % len(frames)]
-        bar  = _animated_bar(min(99, tick * 3), tick, 14)
-        await _safe_edit(msg,
-            f"{spin} **Cutting part {part}/{total}…**\n"
-            f"`{bar}` processing…\n"
-            f"  🔪 ffmpeg at work…"
-        )
-        tick += 1
-        await asyncio.sleep(0.4)
-
-
-# ══════════════════════════════════════════════════════════════
-#  UPLOAD ONE PART — FloodWait safe
-# ══════════════════════════════════════════════════════════════
-async def _upload_part(
-    message, path: str, num: int, total: int,
-    uid: int, thumb_time: float
-) -> bool:
-    if _get_cancel(uid).is_set():
-        return False
-
-    # Animated upload header
-    status = await message.reply(
-        f"⣾ **Upload** — part {num}/{total}\n"
-        f"══════════════════════════\n"
-        f"`░░░░░░░░░░░░░░░░░░` **0.0%**\n"
-        f"  🔵 STARTING — 0 B / ?\n"
-        f"══════════════════════════\n"
-        f"  ❌ /cancel to abort"
-    )
-    _reset(uid)
-    t0 = time.time()
-
-    thumb_path = f"{THUMB_DIR}/thumb_{uid}_{num}.jpg"
-    thumb = await make_thumb(path, thumb_time, thumb_path)
-
-    uploaded = False
-    # Guard: prevent double-upload across retries
-    _upload_done: bool = False
-
-    for attempt in range(5):
-        if _upload_done:
-            break  # already sent — do NOT retry
-        if _get_cancel(uid).is_set():
-            await _safe_edit(status,
-                "🚫 **Upload cancelled.**\n"
-                "  Stopped by user request."
-            )
-            break
-        try:
-            await message.reply_video(
-                path,
-                caption=(
-                    f"🎬 **Part {num} / {total}**\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"  ✅ Delivered by Ultra Bot v7"
-                ),
-                thumb=thumb,
-                progress=upload_progress,
-                progress_args=(status, t0, uid),
-            )
-            _upload_done = True   # ✅ mark BEFORE break
-            uploaded = True
-            break
-        except FloodWait as e:
-            # FloodWait means Telegram rejected the request — safe to retry
-            wait = e.value + 2
-            for remaining in range(wait, 0, -1):
-                spin = SPINNER_CLOCK[remaining % len(SPINNER_CLOCK)]
-                filled = min(20, int((wait - remaining) / wait * 20))
-                await _safe_edit(status,
-                    f"{spin} **Flood wait** — part {num}/{total}\n"
-                    f"══════════════════════════\n"
-                    f"  ⏳ Telegram says: wait `{remaining}s`\n"
-                    f"  `{'█' * filled}{'░' * (20 - filled)}`\n"
-                    f"  Resuming automatically…"
-                )
-                await asyncio.sleep(1)
-        except Exception as e:
-            err_str = str(e)
-            # If Telegram says message already exists — treat as success
-            if "duplicate" in err_str.lower() or "already" in err_str.lower():
-                _upload_done = True
-                uploaded = True
-                break
-            if attempt >= 4:
-                await _safe_edit(status, f"❌ Upload failed part {num}: `{e}`")
-                break
-            await asyncio.sleep(3)
-
-    _reset(uid)
-    if thumb and os.path.exists(thumb_path):
-        os.remove(thumb_path)
-    try:
-        await status.delete()
-    except Exception:
-        pass
-    return uploaded
-
-
-# ══════════════════════════════════════════════════════════════
-#  /start — cinematic welcome card
-# ══════════════════════════════════════════════════════════════
-@app.on_message(filters.command("start") & filters.incoming, group=0)
-async def start(client, message):
-    if await _dedup(message.id): return
-    name = message.from_user.first_name or "User"
-    await message.reply(
-        f"╔══════════════════════════╗\n"
-        f"║  ⚡  ULTRA BOT  v7  ⚡   ║\n"
-        f"╚══════════════════════════╝\n\n"
-        f"👋 Welcome, **{name}**!\n\n"
-        f"📽 **Send any video** to begin:\n"
-        f"  └─ MP4 · MKV · AVI · MOV · WEBM…\n\n"
-        f"✂️ **Split commands:**\n"
-        f"  • `/split 3`    → 3 equal parts\n"
-        f"  • `/splitmin 2` → 2-min chunks\n\n"
-        f"🛠 **Utilities:**\n"
-        f"  • `/status`     → live task view\n"
-        f"  • `/cancel`     → abort task\n\n"
-        f"──────────────────────────\n"
-        f"  🎨 Animated progress bars\n"
-        f"  📊 Live speed graph\n"
-        f"  🔄 Flood-safe · No crash\n"
-        f"  👥 Multi-user async\n"
-        f"──────────────────────────\n"
-        f"  _Ultra Bot v7 — Ready_"
-    )
-
-
-# ══════════════════════════════════════════════════════════════
-#  /status — live dashboard
-# ══════════════════════════════════════════════════════════════
-@app.on_message(filters.command("status") & filters.incoming, group=0)
-async def status_cmd(client, message):
-    if await _dedup(message.id): return
-    uid  = message.from_user.id
-    info = user_status.get(uid)
-
-    if not _get_lock(uid).locked() or not info:
-        if uid in user_files and os.path.exists(user_files[uid]):
-            fname = os.path.basename(user_files[uid])
-            fsize = _sz(os.path.getsize(user_files[uid]))
-            return await message.reply(
-                f"💤 **IDLE — Ready to split**\n"
-                f"══════════════════════════\n"
-                f"  📁 `{fname}`\n"
-                f"  📦 {fsize}\n"
-                f"══════════════════════════\n"
-                f"  👉 `/split N`  or  `/splitmin N`"
-            )
-        return await message.reply(
-            f"💤 **IDLE**\n"
-            f"══════════════════════════\n"
-            f"  No video loaded.\n"
-            f"  Send a video to start!\n"
-            f"══════════════════════════"
-        )
-
-    elapsed = _eta(time.time() - info["since"])
-    hist    = _get_speed_history(uid)
-    graph   = _mini_graph(hist, 14) if hist else "no data"
-    speed   = _sz(hist[-1]) + "/s" if hist else "—"
-
-    spin = SPINNER_RADAR[int(time.time() * 3) % len(SPINNER_RADAR)]
-    await message.reply(
-        f"{spin} **RUNNING — Live Status**\n"
-        f"══════════════════════════\n"
-        f"  📌 **Task**     `{info['task']}`\n"
-        f"  📝 **Detail**   `{info['detail']}`\n"
-        f"  ⏳ **Running**  `{elapsed}`\n"
-        f"──────────────────────────\n"
-        f"  📊 `{graph}`\n"
-        f"  ⚡ **Speed**    `{speed}`\n"
-        f"══════════════════════════\n"
-        f"  ❌ /cancel to stop"
-    )
-
-
-# ══════════════════════════════════════════════════════════════
-#  /cancel
-# ══════════════════════════════════════════════════════════════
-@app.on_message(filters.command("cancel") & filters.incoming, group=0)
-async def cancel_cmd(client, message):
-    if await _dedup(message.id): return
-    uid = message.from_user.id
-    if not _get_lock(uid).locked():
-        return await message.reply(
-            "💤 **Nothing to cancel.**\n"
-            "  No active task running."
-        )
-    _get_cancel(uid).set()
-    await message.reply(
-        "🚫 **CANCEL REQUESTED**\n"
-        "══════════════════════════\n"
-        "  Stopping at next checkpoint…\n"
-        "  Please wait a moment."
-    )
-
-
-# ══════════════════════════════════════════════════════════════
-#  RECEIVE VIDEO
-# ══════════════════════════════════════════════════════════════
-@app.on_message(filters.incoming & ~filters.command("start") & ~filters.command("split") & ~filters.command("splitmin") & ~filters.command("status") & ~filters.command("cancel") & (filters.video | filters.document), group=1)
-async def receive(client, message):
-    if await _dedup(message.id): return
-
-    uid  = message.from_user.id
-    lock = _get_lock(uid)
-    if lock.locked():
-        return await message.reply(
-            "⏳ **Task in progress!**\n"
-            "  👉 /status · /cancel"
-        )
-
-    media = message.document or message.video
-    if not media: return
-
-    mime      = getattr(media, "mime_type", "") or ""
-    file_size = getattr(media, "file_size", 0) or 0
-
-    if mime and not (mime.startswith("video/") or mime == "application/octet-stream"):
-        return
-
-    # Clean old file
-    if uid in user_files and os.path.exists(user_files[uid]):
-        try: os.remove(user_files[uid])
-        except Exception: pass
-        user_files.pop(uid, None)
-
-    ext_map = {
-        "video/x-matroska": "mkv", "video/mkv":       "mkv",
-        "video/avi":        "avi", "video/x-msvideo":  "avi",
-        "video/webm":      "webm", "video/quicktime":  "mov",
-        "video/x-ms-wmv":  "wmv", "video/3gpp":        "3gp",
-    }
-    ext    = ext_map.get(mime, "mp4")
-    fname  = f"{DOWNLOAD_DIR}/video_{uid}_{message.id}.{ext}"
-    sz_str = _sz(file_size) if file_size else "?"
-
-    status = await message.reply(
-        f"⣾ **DOWNLOAD STARTING**\n"
-        f"══════════════════════════\n"
-        f"  📁 Format  : `{ext.upper()}`\n"
-        f"  📦 Size    : `{sz_str}`\n"
-        f"──────────────────────────\n"
-        f"`░░░░░░░░░░░░░░░░░░` **0%**\n"
-        f"══════════════════════════\n"
-        f"  ❌ /cancel to abort"
-    )
-
-    _get_cancel(uid).clear()
-    _reset(uid)
-    _speed_history.pop(uid, None)
-    _set_status(uid, "Downloading", sz_str)
-    t0 = time.time()
-
-    try:
-        path = await message.download(
-            file_name=fname,
-            progress=progress,
-            progress_args=(status, t0, uid, "📥 Download"),
-        )
-    except Exception as e:
-        _clear_status(uid)
-        await _safe_edit(status, f"❌ **Download failed**\n  `{e}`")
-        return
-
-    if not path or not os.path.exists(path):
-        _clear_status(uid)
-        await _safe_edit(status,
-            "❌ **File not saved**\n"
-            "  Try again or send a different file."
-        )
-        return
-
-    elapsed = time.time() - t0
-    avg_speed = file_size / elapsed if elapsed > 0 and file_size else 0
-    _reset(uid)
-    _clear_status(uid)
-    user_files[uid] = path
-
-    await _safe_edit(status,
-        f"✅ **DOWNLOAD COMPLETE**\n"
-        f"══════════════════════════\n"
-        f"`▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰` **100%**\n"
-        f"  🏆 COMPLETE\n"
-        f"──────────────────────────\n"
-        f"  📁 `{os.path.basename(path)}`\n"
-        f"  📦 `{_sz(os.path.getsize(path))}`\n"
-        f"  ⚡ avg `{_sz(avg_speed)}/s`\n"
-        f"  ⏱ in `{_eta(elapsed)}`\n"
-        f"══════════════════════════\n"
-        f"  👉 `/split N`  or  `/splitmin N`"
-    )
-
-
-# ══════════════════════════════════════════════════════════════
-#  CORE SPLIT LOGIC
-# ══════════════════════════════════════════════════════════════
-async def _do_split(message, uid: int, seg: float, parts: int, label: str) -> None:
-    file   = user_files[uid]
-    cancel = _get_cancel(uid)
-    cancel.clear()
-    _split_tick[uid] = 0
-
-    msg = await message.reply(
-        f"✂️ **{label}**\n"
-        f"══════════════════════════\n"
-        f"`░░░░░░░░░░░░░░░░` **0%**\n"
-        f"  Part **0** / **{parts}** done\n"
-        f"══════════════════════════\n"
-        f"  ❌ /cancel to stop"
-    )
-
-    try:
-        for i in range(parts):
-            if cancel.is_set():
-                await _safe_edit(msg,
-                    f"🚫 **CANCELLED**\n"
-                    f"══════════════════════════\n"
-                    f"  Stopped after **{i}** / **{parts}** parts.\n"
-                    f"  Run `/split` again to retry."
-                )
-                _clear_status(uid)
-                return
-
-            ss = i * seg
-            _set_status(uid, "Splitting", f"part {i+1}/{parts}")
-            await _split_update(msg, i, parts, uid, f"cutting part {i+1}…")
-
-            out = f"{DOWNLOAD_DIR}/part_{uid}_{i+1}.mp4"
-            ok  = await ffmpeg_cut(file, out, ss, seg)
-
-            if not ok or not os.path.exists(out):
-                await _safe_edit(msg,
-                    f"❌ **ffmpeg failed** on part {i+1}\n"
-                    f"  Check the source file and try again."
-                )
-                _clear_status(uid)
-                return
-
-            await _split_update(msg, i, parts, uid, f"uploading part {i+1}…")
-            _set_status(uid, "Uploading", f"part {i+1}/{parts}")
-            uploaded = await _upload_part(message, out, i+1, parts, uid, ss + seg/2)
-            os.remove(out)
-
-            if not uploaded:
-                await _safe_edit(msg,
-                    f"🚫 **CANCELLED**\n"
-                    f"══════════════════════════\n"
-                    f"  Stopped after **{i+1}** / **{parts}** parts."
-                )
-                _clear_status(uid)
-                return
-
-            # Update split bar after successful upload
-            await _split_update(msg, i+1, parts, uid,
-                                 "done!" if i+1==parts else f"next: part {i+2}…")
-
-        os.remove(file)
-        user_files.pop(uid, None)
-        _clear_status(uid)
-
-        # Victory card
-        duration_str = _eta(seg * parts)
-        await _safe_edit(msg,
-            f"🏆 **ALL {parts} PARTS DELIVERED!**\n"
-            f"══════════════════════════\n"
-            f"`▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰` **100%**\n"
-            f"  {'✅' * min(parts, 20)}\n"
-            f"──────────────────────────\n"
-            f"  ✅ **{parts} parts** uploaded\n"
-            f"  📽 Duration: `{duration_str}`\n"
-            f"══════════════════════════\n"
-            f"  _Send another video to split!_"
-        )
-    except Exception as e:
-        _clear_status(uid)
-        await _safe_edit(msg,
-            f"❌ **Unexpected error**\n"
-            f"══════════════════════════\n"
-            f"  `{e}`\n"
-            f"  Please try again."
-        )
-
-
-# ══════════════════════════════════════════════════════════════
-#  /split
-# ══════════════════════════════════════════════════════════════
-@app.on_message(filters.command("split") & filters.incoming, group=0)
-async def split(client, message):
-    if await _dedup(message.id): return
-    uid  = message.from_user.id
-    lock = _get_lock(uid)
-    if lock.locked():
-        return await message.reply(
-            "⏳ **Already processing!**\n"
-            "  👉 /status · /cancel"
-        )
-    if uid not in user_files:
-        return await message.reply(
-            "❌ **No video loaded.**\n"
-            "  Send a video file first!"
-        )
-    try:
-        parts = int(message.command[1])
-        assert parts >= 2
-    except Exception:
-        return await message.reply(
-            "❌ **Usage:** `/split 3`\n"
-            "  Minimum 2 parts."
-        )
-    dur = await get_duration(user_files[uid])
-    if not dur:
-        return await message.reply(
-            "❌ **Could not read video duration.**\n"
-            "  File may be corrupted."
-        )
-    async with lock:
-        await _do_split(
-            message, uid, dur / parts, parts,
-            f"Splitting into **{parts}** equal parts…"
-        )
-
-
-# ══════════════════════════════════════════════════════════════
-#  /splitmin
-# ══════════════════════════════════════════════════════════════
-@app.on_message(filters.command("splitmin") & filters.incoming, group=0)
-async def splitmin(client, message):
-    if await _dedup(message.id): return
-    uid  = message.from_user.id
-    lock = _get_lock(uid)
-    if lock.locked():
-        return await message.reply(
-            "⏳ **Already processing!**\n"
-            "  👉 /status · /cancel"
-        )
-    if uid not in user_files:
-        return await message.reply(
-            "❌ **No video loaded.**\n"
-            "  Send a video file first!"
-        )
-    try:
-        mins = int(message.command[1])
-        assert mins >= 1
-    except Exception:
-        return await message.reply(
-            "❌ **Usage:** `/splitmin 2`\n"
-            "  Chunk size in minutes."
-        )
-    dur = await get_duration(user_files[uid])
-    if not dur:
-        return await message.reply(
-            "❌ **Could not read video duration.**\n"
-            "  File may be corrupted."
-        )
-    seg   = mins * 60
-    parts = math.ceil(dur / seg)
-    async with lock:
-        await _do_split(
-            message, uid, seg, parts,
-            f"Splitting — **{mins}** min chunks → **{parts}** parts…"
-        )
-
-
-# ══════════════════════════════════════════════════════════════
-app.run()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("admin", admin_panel))
+app.add_handler(admin_conv)
+app.add_handler(CallbackQueryHandler(admin_reset, pattern="^admin_reset$"))
+app.add_handler(CallbackQueryHandler(servers,     pattern="^servers_"))
+app.add_handler(CallbackQueryHandler(back,        pattern="^back_"))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie))
+
+print("✅ CineBot Running...")
+app.run_polling()
