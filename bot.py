@@ -25,7 +25,8 @@ if not BOT_TOKEN:
 # ───────────────────────────────────────────────────────────
 
 console = Console()
-client  = telebot.TeleBot(BOT_TOKEN)
+client  = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
+telebot.apihelper.RETRY_ON_ERROR = True
 stats   = {"total": 0, "start": 0, "other": 0, "users": set()}
 
 EXPIRED_MSG = f"""⚠️ *This bot is expired\\!*
@@ -149,6 +150,6 @@ if __name__ == "__main__":
     threading.Thread(target=live_stats, daemon=True).start()
 
     try:
-        client.infinity_polling(timeout=10, long_polling_timeout=5)
+        client.infinity_polling(timeout=20, long_polling_timeout=10, skip_pending=True, none_stop=True, restart_on_change=False)
     except KeyboardInterrupt:
         console.print("\n[bold red]  ⛔ Bot stopped.[/]\n")
