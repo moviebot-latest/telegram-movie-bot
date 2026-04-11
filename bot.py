@@ -14,9 +14,8 @@ def get_button():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# Typing + reply function
+# Typing + reply
 async def send_reply(update):
-    # typing animation
     await update.message.chat.send_action(action="typing")
     await asyncio.sleep(1.5)
 
@@ -25,25 +24,23 @@ async def send_reply(update):
         reply_markup=get_button()
     )
 
-# /start command
+# Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_reply(update)
 
-# All messages
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_reply(update)
 
-# Main
-async def main():
+# ✅ FIXED MAIN (NO asyncio.run)
+def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.ALL, handle_message))
 
-    print("✅ Bot Running with Typing Animation...")
+    print("✅ Bot Running without event loop error...")
 
-    await app.run_polling()
+    app.run_polling()   # ✅ direct run
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    main()
